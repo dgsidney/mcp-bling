@@ -6,6 +6,8 @@ Servidor **MCP remoto** para a [API v3 do Bling](https://developer.bling.com.br/
 - **Auth:** OAuth 2.0 com o **Bling como provedor upstream** (cada tenant entra com a própria conta → **multi-tenant**)
 - **Estado:** Durable Objects (tokens por sessão, com refresh automático)
 
+> **Produção:** `https://mcp-bling.bconnector.com.br` — endpoint MCP em `https://mcp-bling.bconnector.com.br/mcp`.
+
 ## Arquitetura
 
 ```
@@ -39,8 +41,8 @@ App / Claude / Agente  ──(OAuth MCP)──►  Worker MCP Bling  ──(OAut
 Em **developer.bling.com.br → Cadastro de aplicativos**:
 
 - Selecione os **escopos** que você vai usar (produtos, pedidos, contatos, etc.).
-- Defina a **URL de redirecionamento** = `https://<seu-worker>.workers.dev/callback`
-  (você descobre a URL após o primeiro deploy; pode voltar e editar depois).
+- Defina a **URL de redirecionamento** = `https://mcp-bling.bconnector.com.br/callback`
+  (deve bater exatamente com o domínio do Worker em produção).
 - Guarde o **Client ID** e **Client Secret**.
 
 ### 2. Instalar dependências
@@ -90,7 +92,7 @@ npm run dev      # http://localhost:8787
 
 ## Conectar nos apps
 
-O endpoint MCP é **`https://<seu-worker>/mcp`**.
+O endpoint MCP em produção é **`https://mcp-bling.bconnector.com.br/mcp`**.
 
 **Clientes com suporte a MCP remoto (HTTP):** aponte direto para a URL `/mcp`. O cliente
 abre o fluxo OAuth automaticamente na primeira conexão.
@@ -102,7 +104,7 @@ abre o fluxo OAuth automaticamente na primeira conexão.
   "mcpServers": {
     "bling": {
       "command": "npx",
-      "args": ["mcp-remote", "https://<seu-worker>.workers.dev/mcp"]
+      "args": ["mcp-remote", "https://mcp-bling.bconnector.com.br/mcp"]
     }
   }
 }

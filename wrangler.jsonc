@@ -7,6 +7,12 @@
   "observability": {
     "enabled": true
   },
+  "routes": [
+    {
+      "pattern": "mcp-bling.bconnector.com.br",
+      "custom_domain": true
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",
