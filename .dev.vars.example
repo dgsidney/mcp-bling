@@ -1,0 +1,4 @@
+# Credenciais do app criado em https://developer.bling.com.br/aplicativos
+# Copie para .dev.vars (não versionado) e preencha para rodar `npm run dev`.
+BLING_CLIENT_ID=seu_client_id
+BLING_CLIENT_SECRET=seu_client_secret
