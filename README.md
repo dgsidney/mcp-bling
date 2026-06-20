@@ -139,18 +139,24 @@ Inspecionar/testar: `npx @modelcontextprotocol/inspector` e conectar em `/mcp`.
 
 ## Tools disponíveis
 
+São **6 tools**: 5 genéricas tipadas (CRUD) parametrizadas pelo `recurso`, + uma escotilha.
+
 | Tool | Descrição |
 |---|---|
-| `bling_listar_produtos` | Lista produtos (paginado) |
-| `bling_obter_produto` | Detalhe de um produto por ID |
-| `bling_listar_pedidos_venda` | Lista pedidos de venda (filtros de data/situação) |
-| `bling_obter_pedido_venda` | Detalhe de um pedido de venda por ID |
-| `bling_listar_contatos` | Lista contatos (clientes/fornecedores) |
-| `bling_obter_contato` | Detalhe de um contato por ID |
-| `bling_request` | **Escotilha genérica**: qualquer método/endpoint da API v3 (NF-e, estoque, finanças…) |
+| `bling_listar` | Lista (paginado) registros de um recurso, com `filtros` de query |
+| `bling_obter` | Detalhe de um registro por ID |
+| `bling_criar` | Cria um registro (POST) |
+| `bling_atualizar` | Atualiza um registro (PUT, ou PATCH com `parcial=true`) |
+| `bling_excluir` | Remove um registro (DELETE) |
+| `bling_request` | **Escotilha**: sub-rotas/endpoints especiais (`/estoques/saldos`, `/produtos/variacoes/atributos`, etc.) |
 
-A `bling_request` cobre toda a API mesmo antes de você criar tools específicas. Conforme
-os apps forem usando, vale promover os endpoints mais comuns a tools dedicadas em `src/tools.ts`.
+O parâmetro **`recurso`** é um enum que cobre ~30 módulos do Bling (produtos, pedidos-vendas,
+pedidos-compras, contatos, contas-pagar, contas-receber, contas-contabeis, nfe, estoques,
+depositos, empresas, categorias-produtos, categorias-receitas-despesas, canais-venda,
+formas-pagamentos, naturezas-operacoes, logisticas[-objetos/-remessas/-servicos],
+ordens-producao, produtos-[estruturas/fornecedores/variacoes], propostas-comerciais,
+situacoes[-modulos/-transicoes], contratos, usuarios). O mapa recurso→path está em
+`src/tools.ts`. Sub-recursos e endpoints especiais ficam por conta do `bling_request`.
 
 ## Multi-tenant
 

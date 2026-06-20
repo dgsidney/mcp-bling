@@ -17,28 +17,98 @@ const fail = (e: unknown): ToolResult => ({
 });
 
 /**
+ * Registro de recursos da API v3 do Bling.
+ * chave (usada no enum `recurso`) -> { path relativo, rótulo legível }.
+ * Paths conferidos contra a lib oficial bling-erp-api-js.
+ */
+const RESOURCES = {
+  "canais-venda": { path: "canais-venda", label: "Canais de venda" },
+  "categorias-produtos": { path: "categorias/produtos", label: "Categorias de produtos" },
+  "categorias-receitas-despesas": {
+    path: "categorias/receitas-despesas",
+    label: "Categorias de receitas e despesas",
+  },
+  "contas-pagar": { path: "contas/pagar", label: "Contas a pagar" },
+  "contas-receber": { path: "contas/receber", label: "Contas a receber" },
+  "contas-contabeis": { path: "contas-contabeis", label: "Contas contábeis/financeiras" },
+  contatos: { path: "contatos", label: "Contatos (clientes/fornecedores)" },
+  contratos: { path: "contratos", label: "Contratos" },
+  depositos: { path: "depositos", label: "Depósitos" },
+  empresas: { path: "empresas", label: "Empresas" },
+  estoques: { path: "estoques", label: "Estoque (saldos via bling_request /estoques/saldos)" },
+  "formas-pagamentos": { path: "formas-pagamentos", label: "Formas de pagamento" },
+  logisticas: { path: "logisticas", label: "Logísticas" },
+  "logisticas-objetos": { path: "logisticas/objetos", label: "Logísticas - Objetos" },
+  "logisticas-remessas": { path: "logisticas/remessas", label: "Logísticas - Remessas" },
+  "logisticas-servicos": { path: "logisticas/servicos", label: "Logísticas - Serviços" },
+  "naturezas-operacoes": { path: "naturezas-operacoes", label: "Naturezas de operação" },
+  nfe: { path: "nfe", label: "Notas fiscais eletrônicas (NF-e)" },
+  "ordens-producao": { path: "ordens-producao", label: "Ordens de produção" },
+  "pedidos-compras": { path: "pedidos/compras", label: "Pedidos de compra" },
+  "pedidos-vendas": { path: "pedidos/vendas", label: "Pedidos de venda" },
+  produtos: { path: "produtos", label: "Produtos" },
+  "produtos-estruturas": { path: "produtos/estruturas", label: "Produtos - Estrutura (kits)" },
+  "produtos-fornecedores": { path: "produtos/fornecedores", label: "Produtos - Fornecedores" },
+  "produtos-variacoes": { path: "produtos/variacoes", label: "Produtos - Variações" },
+  "propostas-comerciais": { path: "propostas-comerciais", label: "Propostas comerciais" },
+  situacoes: { path: "situacoes", label: "Situações" },
+  "situacoes-modulos": { path: "situacoes/modulos", label: "Situações - Módulos" },
+  "situacoes-transicoes": { path: "situacoes/transicoes", label: "Situações - Transições" },
+  usuarios: { path: "usuarios", label: "Usuários" },
+} as const;
+
+type ResourceKey = keyof typeof RESOURCES;
+const RESOURCE_KEYS = Object.keys(RESOURCES) as [ResourceKey, ...ResourceKey[]];
+const RESOURCE_DOC = RESOURCE_KEYS.map((k) => `${k} = ${RESOURCES[k].label}`).join("; ");
+
+const pathFor = (recurso: ResourceKey): string => `/${RESOURCES[recurso].path}`;
+
+const recursoSchema = z
+  .enum(RESOURCE_KEYS)
+  .describe(`Recurso da API v3 do Bling. Opções: ${RESOURCE_DOC}`);
+
+const idSchema = z.union([z.number().int(), z.string()]).describe("ID do registro");
+
+const filtrosSchema = z
+  .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+  .optional()
+  .describe(
+    'Filtros adicionais de query string, conforme o recurso. ' +
+      'Ex: {"dataInicial":"2024-01-01","dataFinal":"2024-12-31","idContato":123,"pesquisa":"texto"}',
+  );
+
+const dadosSchema = z
+  .record(z.string(), z.any())
+  .describe("Objeto JSON com os campos do registro, conforme a documentação do recurso.");
+
+/**
  * Registra as tools do MCP. `getClient` devolve um BlingClient já autenticado
  * com os tokens do tenant da sessão atual.
+ *
+ * Estratégia: 5 tools genéricas tipadas (CRUD) parametrizadas por `recurso`
+ * (cobre ~30 módulos do Bling sem explodir a contagem de tools) + uma escotilha
+ * `bling_request` para sub-rotas e endpoints especiais.
  */
 export function registerTools(server: McpServer, getClient: () => BlingClient): void {
-  // ---- Produtos -----------------------------------------------------------
   server.registerTool(
-    "bling_listar_produtos",
+    "bling_listar",
     {
-      title: "Listar produtos",
-      description: "Lista produtos cadastrados no Bling, com paginação.",
+      title: "Listar registros de um recurso",
+      description:
+        "Lista (paginado) registros de qualquer recurso da API v3 do Bling. " +
+        "Para sub-recursos ou endpoints especiais, use bling_request.",
       inputSchema: {
+        recurso: recursoSchema,
         pagina: z.number().int().min(1).optional().describe("Página (padrão 1)"),
         limite: z.number().int().min(1).max(100).optional().describe("Itens por página (máx. 100)"),
-        criterio: z.string().optional().describe("Critério de busca textual"),
-        tipo: z.string().optional().describe("Filtro por tipo de produto"),
+        filtros: filtrosSchema,
       },
     },
-    async ({ pagina, limite, criterio, tipo }) => {
+    async ({ recurso, pagina, limite, filtros }) => {
       try {
         return ok(
-          await getClient().request("GET", "/produtos", {
-            query: { pagina, limite, criterio, tipo },
+          await getClient().request("GET", pathFor(recurso), {
+            query: { pagina, limite, ...(filtros ?? {}) },
           }),
         );
       } catch (e) {
@@ -48,40 +118,56 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
   );
 
   server.registerTool(
-    "bling_obter_produto",
+    "bling_obter",
     {
-      title: "Obter produto",
-      description: "Retorna os detalhes de um produto pelo seu ID.",
-      inputSchema: { idProduto: z.number().int().describe("ID do produto no Bling") },
+      title: "Obter um registro por ID",
+      description: "Retorna os detalhes de um registro de um recurso, pelo seu ID.",
+      inputSchema: { recurso: recursoSchema, id: idSchema },
     },
-    async ({ idProduto }) => {
+    async ({ recurso, id }) => {
       try {
-        return ok(await getClient().request("GET", `/produtos/${idProduto}`));
+        return ok(await getClient().request("GET", `${pathFor(recurso)}/${id}`));
       } catch (e) {
         return fail(e);
       }
     },
   );
 
-  // ---- Pedidos de venda ---------------------------------------------------
   server.registerTool(
-    "bling_listar_pedidos_venda",
+    "bling_criar",
     {
-      title: "Listar pedidos de venda",
-      description: "Lista pedidos de venda, com filtros opcionais de data e situação.",
+      title: "Criar um registro",
+      description: "Cria um novo registro (POST) no recurso informado.",
+      inputSchema: { recurso: recursoSchema, dados: dadosSchema },
+    },
+    async ({ recurso, dados }) => {
+      try {
+        return ok(await getClient().request("POST", pathFor(recurso), { body: dados }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "bling_atualizar",
+    {
+      title: "Atualizar um registro",
+      description:
+        "Atualiza um registro existente. Usa PUT (substituição) por padrão; " +
+        "informe parcial=true para PATCH (atualização parcial).",
       inputSchema: {
-        pagina: z.number().int().min(1).optional(),
-        limite: z.number().int().min(1).max(100).optional(),
-        dataInicial: z.string().optional().describe("Data inicial (YYYY-MM-DD)"),
-        dataFinal: z.string().optional().describe("Data final (YYYY-MM-DD)"),
-        idSituacao: z.number().int().optional().describe("ID da situação do pedido"),
+        recurso: recursoSchema,
+        id: idSchema,
+        dados: dadosSchema,
+        parcial: z.boolean().optional().describe("true = PATCH (parcial); padrão = PUT"),
       },
     },
-    async ({ pagina, limite, dataInicial, dataFinal, idSituacao }) => {
+    async ({ recurso, id, dados, parcial }) => {
       try {
         return ok(
-          await getClient().request("GET", "/pedidos/vendas", {
-            query: { pagina, limite, dataInicial, dataFinal, idSituacao },
+          await getClient().request(parcial ? "PATCH" : "PUT", `${pathFor(recurso)}/${id}`, {
+            body: dados,
           }),
         );
       } catch (e) {
@@ -91,54 +177,15 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
   );
 
   server.registerTool(
-    "bling_obter_pedido_venda",
+    "bling_excluir",
     {
-      title: "Obter pedido de venda",
-      description: "Retorna os detalhes de um pedido de venda pelo seu ID.",
-      inputSchema: { idPedidoVenda: z.number().int().describe("ID do pedido de venda") },
+      title: "Excluir um registro",
+      description: "Remove (DELETE) um registro do recurso, pelo seu ID.",
+      inputSchema: { recurso: recursoSchema, id: idSchema },
     },
-    async ({ idPedidoVenda }) => {
+    async ({ recurso, id }) => {
       try {
-        return ok(await getClient().request("GET", `/pedidos/vendas/${idPedidoVenda}`));
-      } catch (e) {
-        return fail(e);
-      }
-    },
-  );
-
-  // ---- Contatos -----------------------------------------------------------
-  server.registerTool(
-    "bling_listar_contatos",
-    {
-      title: "Listar contatos",
-      description: "Lista contatos (clientes/fornecedores) do Bling.",
-      inputSchema: {
-        pagina: z.number().int().min(1).optional(),
-        limite: z.number().int().min(1).max(100).optional(),
-        pesquisa: z.string().optional().describe("Texto de busca (nome, documento, etc.)"),
-      },
-    },
-    async ({ pagina, limite, pesquisa }) => {
-      try {
-        return ok(
-          await getClient().request("GET", "/contatos", { query: { pagina, limite, pesquisa } }),
-        );
-      } catch (e) {
-        return fail(e);
-      }
-    },
-  );
-
-  server.registerTool(
-    "bling_obter_contato",
-    {
-      title: "Obter contato",
-      description: "Retorna os detalhes de um contato pelo seu ID.",
-      inputSchema: { idContato: z.number().int().describe("ID do contato") },
-    },
-    async ({ idContato }) => {
-      try {
-        return ok(await getClient().request("GET", `/contatos/${idContato}`));
+        return ok(await getClient().request("DELETE", `${pathFor(recurso)}/${id}`));
       } catch (e) {
         return fail(e);
       }
@@ -151,12 +198,13 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
     {
       title: "Requisição genérica à API do Bling",
       description:
-        "Faz uma requisição arbitrária à API v3 do Bling. Use para qualquer endpoint não " +
-        "coberto pelas tools específicas (ex: notas fiscais, estoques, finanças). " +
+        "Faz uma requisição arbitrária à API v3 do Bling. Use para sub-rotas e endpoints " +
+        "especiais não cobertos pelas tools CRUD — ex: '/estoques/saldos', " +
+        "'/produtos/variacoes/atributos', '/naturezas-operacoes/{id}/obter-tributacao'. " +
         "O 'caminho' é relativo a https://api.bling.com.br/Api/v3 e deve começar com '/'.",
       inputSchema: {
         metodo: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
-        caminho: z.string().describe("Ex: '/produtos', '/pedidos/vendas', '/nfe'"),
+        caminho: z.string().describe("Ex: '/estoques/saldos', '/pedidos/vendas/123'"),
         query: z
           .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
           .optional()
