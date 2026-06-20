@@ -15,8 +15,8 @@ export { BlingMCP };
  */
 export default new OAuthProvider({
   apiHandlers: {
-    "/mcp": BlingMCP.serve("/mcp"),
-    "/sse": BlingMCP.serveSSE("/sse"),
+    "/mcp": BlingMCP.serve("/mcp", { binding: "BLING_MCP" }),
+    "/sse": BlingMCP.serveSSE("/sse", { binding: "BLING_MCP" }),
   },
   defaultHandler: app,
   authorizeEndpoint: "/authorize",
