@@ -97,6 +97,31 @@ O endpoint MCP em produção é **`https://mcp-bling.bconnector.com.br/mcp`**.
 **Clientes com suporte a MCP remoto (HTTP):** aponte direto para a URL `/mcp`. O cliente
 abre o fluxo OAuth automaticamente na primeira conexão.
 
+**Claude Code (CLI ou extensão do VS Code):**
+
+```bash
+# escopo do projeto -> grava em .mcp.json (compartilhável com o time via git)
+claude mcp add --transport http bling https://mcp-bling.bconnector.com.br/mcp --scope project
+```
+
+Depois, dentro do Claude Code, rode `/mcp` para **autenticar** (abre o login do Bling no
+navegador; cada dev entra com a própria conta → multi-tenant). Escopos disponíveis:
+`--scope local` (só você, padrão), `--scope project` (`.mcp.json` versionado no repo),
+`--scope user` (vale em todos os seus projetos).
+
+Alternativa: criar `.mcp.json` na raiz do projeto manualmente:
+
+```json
+{
+  "mcpServers": {
+    "bling": {
+      "type": "http",
+      "url": "https://mcp-bling.bconnector.com.br/mcp"
+    }
+  }
+}
+```
+
 **Claude Desktop / clientes só-stdio** (via [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)):
 
 ```json
