@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { BlingClient } from "./bling-client";
+import type { BlingRequester } from "./bling-client";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
@@ -82,14 +82,14 @@ const dadosSchema = z
   .describe("Objeto JSON com os campos do registro, conforme a documentação do recurso.");
 
 /**
- * Registra as tools do MCP. `getClient` devolve um BlingClient já autenticado
- * com os tokens do tenant da sessão atual.
+ * Registra as tools do MCP. `request` executa chamadas à API do Bling já
+ * autenticadas com o access_token do tenant da requisição atual.
  *
  * Estratégia: 5 tools genéricas tipadas (CRUD) parametrizadas por `recurso`
  * (cobre ~30 módulos do Bling sem explodir a contagem de tools) + uma escotilha
  * `bling_request` para sub-rotas e endpoints especiais.
  */
-export function registerTools(server: McpServer, getClient: () => BlingClient): void {
+export function registerTools(server: McpServer, request: BlingRequester): void {
   server.registerTool(
     "bling_listar",
     {
@@ -107,7 +107,7 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
     async ({ recurso, pagina, limite, filtros }) => {
       try {
         return ok(
-          await getClient().request("GET", pathFor(recurso), {
+          await request("GET", pathFor(recurso), {
             query: { pagina, limite, ...(filtros ?? {}) },
           }),
         );
@@ -126,7 +126,7 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
     },
     async ({ recurso, id }) => {
       try {
-        return ok(await getClient().request("GET", `${pathFor(recurso)}/${id}`));
+        return ok(await request("GET", `${pathFor(recurso)}/${id}`));
       } catch (e) {
         return fail(e);
       }
@@ -142,7 +142,7 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
     },
     async ({ recurso, dados }) => {
       try {
-        return ok(await getClient().request("POST", pathFor(recurso), { body: dados }));
+        return ok(await request("POST", pathFor(recurso), { body: dados }));
       } catch (e) {
         return fail(e);
       }
@@ -166,7 +166,7 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
     async ({ recurso, id, dados, parcial }) => {
       try {
         return ok(
-          await getClient().request(parcial ? "PATCH" : "PUT", `${pathFor(recurso)}/${id}`, {
+          await request(parcial ? "PATCH" : "PUT", `${pathFor(recurso)}/${id}`, {
             body: dados,
           }),
         );
@@ -185,7 +185,7 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
     },
     async ({ recurso, id }) => {
       try {
-        return ok(await getClient().request("DELETE", `${pathFor(recurso)}/${id}`));
+        return ok(await request("DELETE", `${pathFor(recurso)}/${id}`));
       } catch (e) {
         return fail(e);
       }
@@ -214,7 +214,7 @@ export function registerTools(server: McpServer, getClient: () => BlingClient): 
     },
     async ({ metodo, caminho, query, corpo }) => {
       try {
-        return ok(await getClient().request(metodo, caminho, { query, body: corpo }));
+        return ok(await request(metodo, caminho, { query, body: corpo }));
       } catch (e) {
         return fail(e);
       }

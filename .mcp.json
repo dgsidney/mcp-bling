@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "bling": {
+      "type": "http",
+      "url": "https://mcp-bling.bconnector.com.br/mcp"
+    }
+  }
+}

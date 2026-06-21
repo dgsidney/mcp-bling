@@ -1,141 +1,128 @@
 # MCP Bling
 
-Servidor **MCP remoto** para a [API v3 do Bling](https://developer.bling.com.br/home), rodando em **Cloudflare Workers**. Escrito uma vez, reutilizável por **todos os seus apps/agentes** que falam o protocolo MCP.
+Servidor **MCP remoto** para a [API v3 do Bling](https://developer.bling.com.br/home), rodando em **Cloudflare Workers**. Modelo **multi-tenant gerenciado**: seus apps já possuem os tokens OAuth de cada cliente e os enviam por header — o MCP é um *pass-through* stateless, sem navegador e sem banco.
 
-- **Transporte:** Streamable HTTP (`/mcp`) + SSE legado (`/sse`)
-- **Auth:** OAuth 2.0 com o **Bling como provedor upstream** (cada tenant entra com a própria conta → **multi-tenant**)
-- **Estado:** Durable Objects (tokens por sessão, com refresh automático)
+- **Transporte:** Streamable HTTP (`/mcp`)
+- **Auth do app:** service token compartilhado (`Authorization: Bearer …`)
+- **Token do cliente:** header `X-Bling-Access-Token` (pass-through)
+- **Helper de refresh:** `POST /token/refresh` (devolve o `refresh_token` rotacionado)
+- **Stateless:** sem Durable Objects, sem KV
 
-> **Produção:** `https://mcp-bling.bconnector.com.br` — endpoint MCP em `https://mcp-bling.bconnector.com.br/mcp`.
+> **Produção:** `https://mcp-bling.bconnector.com.br`
 
-## Arquitetura
+## Por que esse modelo
+
+A API v3 do Bling é **OAuth 2.0** (a apikey da v2 foi desativada em ago/2024). Como você opera
+**vários clientes** e já guarda o `refresh_token` de cada um na sua base, não faz sentido um login
+interativo por sessão. Em vez disso:
 
 ```
-App / Claude / Agente  ──(OAuth MCP)──►  Worker MCP Bling  ──(OAuth Bling por tenant)──►  API v3 Bling
+seu app ──(Bearer SERVICE_TOKEN + X-Bling-Access-Token)──► MCP Worker ──► API Bling do cliente
 ```
 
-1. O cliente MCP chama `/authorize` no Worker.
-2. O Worker redireciona para o login do Bling (`www.bling.com.br/Api/v3/oauth/authorize`).
-3. O tenant autentica e o Bling volta em `/callback`; o Worker troca o `code` por tokens.
-4. Os tokens do tenant ficam no grant/sessão; as tools chamam a API do Bling com o token certo.
-5. O `access_token` (~6h) é renovado automaticamente via `refresh_token` (~30 dias).
+O app é a fonte da verdade das credenciais; o MCP só expõe as operações do Bling para o agente.
+
+### Rotação de token (importante)
+
+O Bling **rotaciona o `refresh_token` a cada refresh** (o antigo morre). Por isso o `/mcp` recebe
+o **`access_token`** (não o refresh) e nunca renova nada — assim não há disputa de rotação. Quando
+o `access_token` expira, o app chama `POST /token/refresh`, recebe o `refresh_token` **novo** e o
+**salva na base**. Só um lugar deve renovar cada token; mantenha esse fluxo como fonte única.
+
+## Endpoints
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| GET | `/` | — | Landing/health |
+| POST | `/mcp` | `Bearer SERVICE_TOKEN` + `X-Bling-Access-Token` | Endpoint MCP (Streamable HTTP) |
+| POST | `/token/refresh` | `Bearer SERVICE_TOKEN` | `{ refresh_token }` → `{ access_token, refresh_token, expires_at }` |
+
+## Arquivos
 
 | Arquivo | Papel |
 |---|---|
-| `src/index.ts` | Monta o `OAuthProvider` e expõe os endpoints |
-| `src/bling-handler.ts` | Login no Bling (`/authorize`, `/callback`) |
-| `src/mcp.ts` | `BlingMCP` (Durable Object) — estado e tokens por sessão |
-| `src/tools.ts` | Tools MCP expostas aos clientes |
-| `src/bling-client.ts` | Cliente HTTP da API + OAuth + refresh |
-
-## Pré-requisitos
-
-- Node.js 20+ e `npm`
-- Conta Cloudflare (Workers + Durable Objects — o free tier já cobre)
-- Um app criado em [developer.bling.com.br](https://developer.bling.com.br/aplicativos)
+| `src/index.ts` | Worker: auth do service token, `/token/refresh` e o handler MCP |
+| `src/tools.ts` | Tools MCP (CRUD genérico por `recurso` + escotilha) |
+| `src/bling-client.ts` | `createRequester` (chamadas com access_token) e `refreshTokens` |
 
 ## Setup
 
-### 1. Registrar o app no Bling
+### 1. App no Bling
 
-Em **developer.bling.com.br → Cadastro de aplicativos**:
+Em [developer.bling.com.br/aplicativos](https://developer.bling.com.br/aplicativos), pegue o
+**Client ID** e **Client Secret** (usados apenas pelo `/token/refresh`). Os escopos definem o que
+o token consegue acessar.
 
-- Selecione os **escopos** que você vai usar (produtos, pedidos, contatos, etc.).
-- Defina a **URL de redirecionamento** = `https://mcp-bling.bconnector.com.br/callback`
-  (deve bater exatamente com o domínio do Worker em produção).
-- Guarde o **Client ID** e **Client Secret**.
-
-### 2. Instalar dependências
+### 2. Dependências
 
 ```bash
 npm install
 ```
 
-### 3. Criar o KV namespace (usado pelo OAuthProvider)
+### 3. Secrets (Cloudflare)
 
 ```bash
-npx wrangler login              # se ainda não estiver logado
-npx wrangler kv namespace create OAUTH_KV
-```
-
-Copie o `id` retornado para o campo `kv_namespaces[0].id` em **`wrangler.jsonc`**
-(substituindo `PREENCHER_COM_O_ID_DO_KV`).
-
-### 4. Configurar as credenciais
-
-**Produção** (secrets na Cloudflare):
-
-```bash
+npx wrangler secret put SERVICE_TOKEN      # token compartilhado entre seus apps
 npx wrangler secret put BLING_CLIENT_ID
 npx wrangler secret put BLING_CLIENT_SECRET
 ```
 
-**Desenvolvimento local:** copie `.dev.vars.example` para `.dev.vars` e preencha.
+Para dev local, copie `.dev.vars.example` para `.dev.vars` e preencha os três.
 
-### 5. Deploy
+### 4. Deploy
 
 ```bash
 npm run deploy
 ```
 
-Anote a URL (`https://mcp-bling.<conta>.workers.dev`). Se ainda não tinha definido a
-URL de redirecionamento no Bling, volte ao passo 1 e use `https://<url>/callback`.
+## Uso pelos apps
 
-### Desenvolvimento local
+Fluxo típico (pseudo-código):
 
-```bash
-npm run dev      # http://localhost:8787
+```ts
+// 1) Quando o access_token do cliente expirar, renove via Worker:
+const r = await fetch("https://mcp-bling.bconnector.com.br/token/refresh", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${SERVICE_TOKEN}`, "Content-Type": "application/json" },
+  body: JSON.stringify({ refresh_token: tenant.blingRefreshToken }),
+}).then((r) => r.json());
+// salve r.refresh_token (rotacionado!) e r.access_token na sua base
+
+// 2) Conecte no MCP passando o access_token do cliente:
+//    headers: Authorization: Bearer <SERVICE_TOKEN>; X-Bling-Access-Token: <r.access_token>
 ```
 
-> Para testar o fluxo OAuth localmente, registre (ou edite) um app de teste no Bling
-> apontando o redirect para `http://localhost:8787/callback`.
-
-## Conectar nos apps
-
-O endpoint MCP em produção é **`https://mcp-bling.bconnector.com.br/mcp`**.
-
-**Clientes com suporte a MCP remoto (HTTP):** aponte direto para a URL `/mcp`. O cliente
-abre o fluxo OAuth automaticamente na primeira conexão.
-
-**Claude Code (CLI ou extensão do VS Code):**
+### Claude Code (CLI ou extensão do VS Code)
 
 ```bash
-# escopo do projeto -> grava em .mcp.json (compartilhável com o time via git)
-claude mcp add --transport http bling https://mcp-bling.bconnector.com.br/mcp --scope project
+claude mcp add --transport http bling https://mcp-bling.bconnector.com.br/mcp \
+  --header "Authorization: Bearer <SERVICE_TOKEN>" \
+  --header "X-Bling-Access-Token: <access_token do cliente>" \
+  --scope project
 ```
 
-Depois, dentro do Claude Code, rode `/mcp` para **autenticar** (abre o login do Bling no
-navegador; cada dev entra com a própria conta → multi-tenant). Escopos disponíveis:
-`--scope local` (só você, padrão), `--scope project` (`.mcp.json` versionado no repo),
-`--scope user` (vale em todos os seus projetos).
-
-Alternativa: criar `.mcp.json` na raiz do projeto manualmente:
+Ou em `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "bling": {
       "type": "http",
-      "url": "https://mcp-bling.bconnector.com.br/mcp"
+      "url": "https://mcp-bling.bconnector.com.br/mcp",
+      "headers": {
+        "Authorization": "Bearer <SERVICE_TOKEN>",
+        "X-Bling-Access-Token": "<access_token do cliente>"
+      }
     }
   }
 }
 ```
 
-**Claude Desktop / clientes só-stdio** (via [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)):
+### Testar com o MCP Inspector
 
-```json
-{
-  "mcpServers": {
-    "bling": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://mcp-bling.bconnector.com.br/mcp"]
-    }
-  }
-}
-```
-
-Inspecionar/testar: `npx @modelcontextprotocol/inspector` e conectar em `/mcp`.
+`npx @modelcontextprotocol/inspector` → Transport `Streamable HTTP`, URL `…/mcp`, e em
+**Authentication/Headers** adicione `Authorization: Bearer <SERVICE_TOKEN>` e
+`X-Bling-Access-Token: <token>`.
 
 ## Tools disponíveis
 
@@ -148,26 +135,23 @@ São **6 tools**: 5 genéricas tipadas (CRUD) parametrizadas pelo `recurso`, + u
 | `bling_criar` | Cria um registro (POST) |
 | `bling_atualizar` | Atualiza um registro (PUT, ou PATCH com `parcial=true`) |
 | `bling_excluir` | Remove um registro (DELETE) |
-| `bling_request` | **Escotilha**: sub-rotas/endpoints especiais (`/estoques/saldos`, `/produtos/variacoes/atributos`, etc.) |
+| `bling_request` | **Escotilha**: sub-rotas/endpoints especiais (`/estoques/saldos`, etc.) |
 
 O parâmetro **`recurso`** é um enum que cobre ~30 módulos do Bling (produtos, pedidos-vendas,
 pedidos-compras, contatos, contas-pagar, contas-receber, contas-contabeis, nfe, estoques,
 depositos, empresas, categorias-produtos, categorias-receitas-despesas, canais-venda,
 formas-pagamentos, naturezas-operacoes, logisticas[-objetos/-remessas/-servicos],
 ordens-producao, produtos-[estruturas/fornecedores/variacoes], propostas-comerciais,
-situacoes[-modulos/-transicoes], contratos, usuarios). O mapa recurso→path está em
-`src/tools.ts`. Sub-recursos e endpoints especiais ficam por conta do `bling_request`.
+situacoes[-modulos/-transicoes], contratos, usuarios). O mapa recurso→path está em `src/tools.ts`.
 
 ## Multi-tenant
 
-Cada cliente que faz login entra com a **própria conta Bling**, e os tokens daquele tenant
-ficam isolados no grant/sessão correspondente. Nenhum tenant enxerga dados de outro. Não há
-configuração extra: o isolamento vem do fluxo OAuth.
+Cada requisição carrega o `access_token` de **um** cliente no header. O isolamento é por token:
+o MCP nunca mistura contas, e não guarda credencial nenhuma (stateless).
 
 ## Hardening (próximos passos sugeridos)
 
-- **Tela de consentimento** anti-"confused deputy" (cookie de aprovação por client) antes de
-  redirecionar ao Bling — hoje o login do Bling já é a etapa de consentimento.
-- **Identificar a conta Bling** (nome/ID da empresa) para rotular grants e logs, em vez do UUID.
-- **Webhooks do Bling** para eventos (pedidos, estoque) se algum app precisar de push.
-```
+- **Chave por app** em vez de service token único (auditoria/revogação por app).
+- **Rate limiting** por app/tenant (Cloudflare WAF ou contadores).
+- **Onboarding de novos clientes**: endpoint `/oauth/authorize` + `/callback` para capturar o
+  primeiro `refresh_token` de um cliente e te devolver (caso precise emitir novos no futuro).

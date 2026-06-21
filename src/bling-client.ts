@@ -1,18 +1,17 @@
 /**
- * Cliente HTTP para a API v3 do Bling + helpers de OAuth 2.0.
+ * Cliente HTTP para a API v3 do Bling + helper de refresh de OAuth.
  *
  * Docs: https://developer.bling.com.br/bling-api
- *  - Authorize: https://www.bling.com.br/Api/v3/oauth/authorize
- *  - Token:     https://www.bling.com.br/Api/v3/oauth/token  (Basic auth + form-urlencoded)
- *  - API base:  https://api.bling.com.br/Api/v3
+ *  - Token:    https://www.bling.com.br/Api/v3/oauth/token (Basic auth + form-urlencoded)
+ *  - API base: https://api.bling.com.br/Api/v3
+ *
+ * Modelo de auth (multi-tenant gerenciado): o app chamador já possui o token do
+ * cliente. No /mcp ele envia o `access_token` (pass-through). Para renovar, usa o
+ * endpoint /token/refresh, que devolve o refresh_token rotacionado para o app salvar.
  */
 
 export const BLING_API_BASE = "https://api.bling.com.br/Api/v3";
-export const BLING_AUTHORIZE_URL = "https://www.bling.com.br/Api/v3/oauth/authorize";
 export const BLING_TOKEN_URL = "https://www.bling.com.br/Api/v3/oauth/token";
-
-/** Margem (ms) para renovar o token antes de expirar de fato. */
-const REFRESH_SKEW_MS = 60_000;
 
 export interface BlingTokens {
   accessToken: string;
@@ -33,8 +32,9 @@ function basicAuthHeader(clientId: string, clientSecret: string): string {
   return "Basic " + btoa(`${clientId}:${clientSecret}`);
 }
 
-async function postToken(
-  params: Record<string, string>,
+/** Renova o access_token usando o refresh_token. Retorna o refresh_token ROTACIONADO. */
+export async function refreshTokens(
+  refreshToken: string,
   clientId: string,
   clientSecret: string,
 ): Promise<BlingTokens> {
@@ -45,7 +45,7 @@ async function postToken(
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "1.0",
     },
-    body: new URLSearchParams(params).toString(),
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }).toString(),
   });
 
   const text = await res.text();
@@ -61,90 +61,40 @@ async function postToken(
   };
 }
 
-/** Troca o authorization_code por tokens (etapa final do login). */
-export function exchangeCodeForTokens(
-  code: string,
-  clientId: string,
-  clientSecret: string,
-): Promise<BlingTokens> {
-  return postToken({ grant_type: "authorization_code", code }, clientId, clientSecret);
-}
-
-/** Renova o access_token usando o refresh_token. */
-export function refreshTokens(
-  refreshToken: string,
-  clientId: string,
-  clientSecret: string,
-): Promise<BlingTokens> {
-  return postToken(
-    { grant_type: "refresh_token", refresh_token: refreshToken },
-    clientId,
-    clientSecret,
-  );
-}
-
 export interface BlingRequestOptions {
   query?: Record<string, string | number | boolean | undefined | null>;
   body?: unknown;
 }
 
-/**
- * Cliente por-tenant: carrega os tokens do tenant, renova automaticamente
- * quando necessário e notifica via `onRefresh` para persistir os novos tokens.
- */
-export class BlingClient {
-  constructor(
-    private tokens: BlingTokens,
-    private readonly clientId: string,
-    private readonly clientSecret: string,
-    private readonly onRefresh: (tokens: BlingTokens) => void | Promise<void>,
-  ) {}
+/** Função que executa uma requisição à API do Bling com um access_token já válido. */
+export type BlingRequester = (
+  method: string,
+  path: string,
+  opts?: BlingRequestOptions,
+) => Promise<unknown>;
 
-  private async ensureValidToken(): Promise<void> {
-    if (Date.now() < this.tokens.expiresAt - REFRESH_SKEW_MS) return;
-    await this.doRefresh();
-  }
-
-  private async doRefresh(): Promise<void> {
-    this.tokens = await refreshTokens(this.tokens.refreshToken, this.clientId, this.clientSecret);
-    await this.onRefresh(this.tokens);
-  }
-
-  private buildUrl(path: string, query?: BlingRequestOptions["query"]): string {
+/** Cria um requester vinculado a um access_token (pass-through, sem refresh). */
+export function createRequester(accessToken: string): BlingRequester {
+  return async (method, path, opts = {}) => {
     const normalized = path.startsWith("/") ? path : `/${path}`;
     const url = new URL(BLING_API_BASE + normalized);
-    if (query) {
-      for (const [key, value] of Object.entries(query)) {
+    if (opts.query) {
+      for (const [key, value] of Object.entries(opts.query)) {
         if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
       }
     }
-    return url.toString();
-  }
 
-  private async fetchOnce(method: string, url: string, body?: unknown): Promise<Response> {
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.tokens.accessToken}`,
+      Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
     };
     let payload: string | undefined;
-    if (body !== undefined && method !== "GET" && method !== "DELETE") {
+    if (opts.body !== undefined && method !== "GET" && method !== "DELETE") {
       headers["Content-Type"] = "application/json";
-      payload = JSON.stringify(body);
-    }
-    return fetch(url, { method, headers, body: payload });
-  }
-
-  /** Executa uma requisição à API do Bling, com refresh + 1 retry em 401. */
-  async request(method: string, path: string, opts: BlingRequestOptions = {}): Promise<unknown> {
-    await this.ensureValidToken();
-    const url = this.buildUrl(path, opts.query);
-
-    let res = await this.fetchOnce(method, url, opts.body);
-    if (res.status === 401) {
-      await this.doRefresh();
-      res = await this.fetchOnce(method, url, opts.body);
+      payload = JSON.stringify(opts.body);
     }
 
+    const res = await fetch(url.toString(), { method, headers, body: payload });
     const text = await res.text();
     let data: unknown = null;
     if (text) {
@@ -154,10 +104,9 @@ export class BlingClient {
         data = text;
       }
     }
-
     if (!res.ok) {
-      throw new Error(`Bling API ${method} ${path} -> ${res.status}: ${text}`);
+      throw new Error(`Bling API ${method} ${normalized} -> ${res.status}: ${text}`);
     }
     return data;
-  }
+  };
 }
