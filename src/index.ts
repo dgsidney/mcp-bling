@@ -25,9 +25,9 @@ function authorizeCaller(request: Request, env: Env): boolean {
 }
 
 /** Cria um McpServer novo por requisição (handler stateless), ligado a um access_token. */
-function buildServer(accessToken: string): McpServer {
+function buildServer(accessToken: string, readOnly: boolean): McpServer {
   const server = new McpServer({ name: "bling-mcp", version: "0.2.0" });
-  registerTools(server, createRequester(accessToken));
+  registerTools(server, createRequester(accessToken), { readOnly });
   return server;
 }
 
@@ -62,7 +62,13 @@ export default {
           401,
         );
       }
-      const handler = createMcpHandler(buildServer(accessToken), { route: MCP_ROUTE });
+      // Somente-leitura por padrão (seguro p/ dados de produção). Escrita exige opt-in
+      // explícito por header e pode ser travada globalmente via FORCE_READ_ONLY.
+      const forceReadOnly = env.FORCE_READ_ONLY === "true";
+      const writeRequested = request.headers.get("X-Bling-Allow-Write") === "true";
+      const readOnly = forceReadOnly || !writeRequested;
+
+      const handler = createMcpHandler(buildServer(accessToken, readOnly), { route: MCP_ROUTE });
       return handler(request, env, ctx);
     }
 

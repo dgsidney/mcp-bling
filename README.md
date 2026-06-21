@@ -99,15 +99,27 @@ formas-pagamentos, naturezas-operacoes, logisticas[-objetos/-remessas/-servicos]
 ordens-producao, produtos-[estruturas/fornecedores/variacoes], propostas-comerciais,
 situacoes[-modulos/-transicoes], contratos, usuarios). O mapa recurso→path está em `src/tools.ts`.
 
-## Cuidado ao usar contas reais
+## Modo somente-leitura (padrão)
 
-Você está operando sobre a conta de **produção** do cliente. `bling_criar`/`bling_atualizar`/
-`bling_excluir` **alteram dados reais**. Para desenvolvimento, prefira as tools de leitura
-(`bling_listar`/`bling_obter`) e tome cuidado redobrado com as de escrita.
+Você opera sobre a conta de **produção** do cliente, então o MCP é **somente-leitura por padrão**:
+expõe apenas `bling_listar`, `bling_obter` e `bling_request` (limitado a GET). As tools de escrita
+nem aparecem.
+
+Para habilitar escrita (`bling_criar`/`bling_atualizar`/`bling_excluir` e métodos não-GET no
+`bling_request`), envie o header na conexão:
+
+```
+X-Bling-Allow-Write: true
+```
+
+**Kill-switch global:** defina o secret/var `FORCE_READ_ONLY=true` no Worker para travar tudo em
+somente-leitura, ignorando o header (`npx wrangler secret put FORCE_READ_ONLY`).
+
+> Mesmo com escrita habilitada: `bling_criar`/`bling_atualizar`/`bling_excluir` **alteram dados
+> reais** do cliente. Use com cuidado.
 
 ## Hardening (próximos passos sugeridos)
 
 - **Chave por dev/app** em vez de service token único (auditoria/revogação).
 - **Espelho de token central (Supabase)**: cada app grava o `access_token` atual numa tabela
   read-only; o MCP passa a ler por `X-Tenant-Id` e você escolhe o cliente sem colar token na mão.
-- **Modo somente-leitura** opcional (desabilitar as tools de escrita) para uso em produção.

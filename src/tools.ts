@@ -88,8 +88,16 @@ const dadosSchema = z
  * Estratégia: 5 tools genéricas tipadas (CRUD) parametrizadas por `recurso`
  * (cobre ~30 módulos do Bling sem explodir a contagem de tools) + uma escotilha
  * `bling_request` para sub-rotas e endpoints especiais.
+ *
+ * `options.readOnly` (padrão true): quando ligado, NÃO registra as tools de
+ * escrita (criar/atualizar/excluir) e o `bling_request` só aceita GET.
  */
-export function registerTools(server: McpServer, request: BlingRequester): void {
+export function registerTools(
+  server: McpServer,
+  request: BlingRequester,
+  options: { readOnly?: boolean } = {},
+): void {
+  const readOnly = options.readOnly ?? true;
   server.registerTool(
     "bling_listar",
     {
@@ -133,6 +141,8 @@ export function registerTools(server: McpServer, request: BlingRequester): void 
     },
   );
 
+  // ---- Tools de escrita (apenas fora do modo somente-leitura) -------------
+  if (!readOnly) {
   server.registerTool(
     "bling_criar",
     {
@@ -192,6 +202,8 @@ export function registerTools(server: McpServer, request: BlingRequester): void 
     },
   );
 
+  } // fim das tools de escrita
+
   // ---- Escotilha genérica -------------------------------------------------
   server.registerTool(
     "bling_request",
@@ -213,6 +225,12 @@ export function registerTools(server: McpServer, request: BlingRequester): void 
       },
     },
     async ({ metodo, caminho, query, corpo }) => {
+      if (readOnly && metodo !== "GET") {
+        return fail(
+          "Modo somente-leitura ativo: apenas GET é permitido. Para habilitar escrita, " +
+            "envie o header X-Bling-Allow-Write: true (e o Worker não pode estar com FORCE_READ_ONLY).",
+        );
+      }
       try {
         return ok(await request(metodo, caminho, { query, body: corpo }));
       } catch (e) {
