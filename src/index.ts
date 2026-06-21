@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
-import { createRequester, refreshTokens } from "./bling-client";
+import { createRequester } from "./bling-client";
 import { registerTools } from "./tools";
 
 const MCP_ROUTE = "/mcp";
@@ -37,57 +37,21 @@ export default {
 
     if (url.pathname === "/") {
       return new Response(
-        "MCP Bling — modelo gerenciado por-tenant (stateless).\n\n" +
-          "MCP:     POST /mcp\n" +
-          "  headers: Authorization: Bearer <SERVICE_TOKEN>; X-Bling-Access-Token: <access_token do cliente>\n\n" +
-          "Refresh: POST /token/refresh\n" +
-          "  header:  Authorization: Bearer <SERVICE_TOKEN>\n" +
-          "  body:    { \"refresh_token\": \"...\" }  -> { access_token, refresh_token, expires_at }\n",
+        "MCP Bling — pass-through read-through, multi-tenant gerenciado pelo chamador.\n\n" +
+          "POST /mcp\n" +
+          "  headers: Authorization: Bearer <SERVICE_TOKEN>; X-Bling-Access-Token: <access_token do cliente>\n",
         { headers: { "Content-Type": "text/plain; charset=utf-8" } },
       );
     }
 
-    // Todas as rotas abaixo exigem o service token.
-    if (!authorizeCaller(request, env)) {
-      return json(
-        { error: "unauthorized", error_description: "Service token ausente ou inválido." },
-        401,
-      );
-    }
-
-    // Helper de refresh: troca refresh_token -> tokens (com refresh_token rotacionado).
-    if (url.pathname === "/token/refresh") {
-      if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-      let refreshToken: string | undefined;
-      try {
-        const body = (await request.json()) as { refresh_token?: string };
-        refreshToken = body?.refresh_token;
-      } catch {
-        /* corpo ausente/ inválido */
-      }
-      refreshToken ??= request.headers.get("X-Bling-Refresh-Token") ?? undefined;
-      if (!refreshToken) {
-        return json(
-          {
-            error: "invalid_request",
-            error_description: "refresh_token é obrigatório (body JSON ou header X-Bling-Refresh-Token).",
-          },
-          400,
-        );
-      }
-      try {
-        const t = await refreshTokens(refreshToken, env.BLING_CLIENT_ID, env.BLING_CLIENT_SECRET);
-        return json({ access_token: t.accessToken, refresh_token: t.refreshToken, expires_at: t.expiresAt });
-      } catch (e) {
-        return json(
-          { error: "refresh_failed", error_description: e instanceof Error ? e.message : String(e) },
-          502,
-        );
-      }
-    }
-
-    // Endpoint MCP (Streamable HTTP).
+    // Rota MCP — exige service token + access_token do cliente no header.
     if (url.pathname === MCP_ROUTE) {
+      if (!authorizeCaller(request, env)) {
+        return json(
+          { error: "unauthorized", error_description: "Service token ausente ou inválido." },
+          401,
+        );
+      }
       const accessToken = request.headers.get("X-Bling-Access-Token");
       if (!accessToken) {
         return json(

@@ -1,33 +1,30 @@
 # MCP Bling
 
-Servidor **MCP remoto** para a [API v3 do Bling](https://developer.bling.com.br/home), rodando em **Cloudflare Workers**. Modelo **multi-tenant gerenciado**: seus apps já possuem os tokens OAuth de cada cliente e os enviam por header — o MCP é um *pass-through* stateless, sem navegador e sem banco.
+Servidor **MCP remoto** para a [API v3 do Bling](https://developer.bling.com.br/home), rodando em **Cloudflare Workers**. Ferramenta de **desenvolvimento/debug**: o time aponta o MCP para a conta de **qualquer cliente** (passando o `access_token` daquele cliente) e trabalha com dados reais — NF-e, etiquetas, particularidades — sem o cliente precisar reautenticar nada.
 
 - **Transporte:** Streamable HTTP (`/mcp`)
-- **Auth do app:** service token compartilhado (`Authorization: Bearer …`)
-- **Token do cliente:** header `X-Bling-Access-Token` (pass-through)
-- **Helper de refresh:** `POST /token/refresh` (devolve o `refresh_token` rotacionado)
-- **Stateless:** sem Durable Objects, sem KV
+- **Auth do chamador:** service token compartilhado (`Authorization: Bearer …`)
+- **Token do cliente:** header `X-Bling-Access-Token` (pass-through, **somente leitura** — o MCP nunca renova)
+- **Stateless:** sem Durable Objects, sem KV, sem credenciais do Bling no Worker
 
-> **Produção:** `https://mcp-bling.bconnector.com.br`
+> **Produção:** `https://mcp-bling.bconnector.com.br` — endpoint MCP em `…/mcp`.
 
-## Por que esse modelo
+## Modelo de auth
 
-A API v3 do Bling é **OAuth 2.0** (a apikey da v2 foi desativada em ago/2024). Como você opera
-**vários clientes** e já guarda o `refresh_token` de cada um na sua base, não faz sentido um login
-interativo por sessão. Em vez disso:
+A API v3 do Bling é **OAuth 2.0** (a apikey da v2 foi desativada em ago/2024). Cada app de vocês
+já guarda e renova o token de cada cliente. O MCP **não gerencia token nenhum**: o chamador envia
+um `access_token` válido e o MCP só o repassa para a API do Bling.
 
 ```
-seu app ──(Bearer SERVICE_TOKEN + X-Bling-Access-Token)──► MCP Worker ──► API Bling do cliente
+você (Claude Code) ──(Bearer SERVICE_TOKEN + X-Bling-Access-Token)──► MCP Worker ──► API Bling do cliente
 ```
 
-O app é a fonte da verdade das credenciais; o MCP só expõe as operações do Bling para o agente.
+### Por que o MCP não renova o token
 
-### Rotação de token (importante)
-
-O Bling **rotaciona o `refresh_token` a cada refresh** (o antigo morre). Por isso o `/mcp` recebe
-o **`access_token`** (não o refresh) e nunca renova nada — assim não há disputa de rotação. Quando
-o `access_token` expira, o app chama `POST /token/refresh`, recebe o `refresh_token` **novo** e o
-**salva na base**. Só um lugar deve renovar cada token; mantenha esse fluxo como fonte única.
+O Bling **rotaciona o `refresh_token` a cada refresh**. Como cada app de vocês tem a própria cópia
+do token do cliente, se o MCP renovasse, **invalidaria o token do app em produção** daquele cliente.
+Por isso o MCP é **read-through**: recebe um `access_token` já válido (vence em ~6h) e nunca renova.
+Quem renova continua sendo o app dono do token.
 
 ## Endpoints
 
@@ -35,73 +32,28 @@ o `access_token` expira, o app chama `POST /token/refresh`, recebe o `refresh_to
 |---|---|---|---|
 | GET | `/` | — | Landing/health |
 | POST | `/mcp` | `Bearer SERVICE_TOKEN` + `X-Bling-Access-Token` | Endpoint MCP (Streamable HTTP) |
-| POST | `/token/refresh` | `Bearer SERVICE_TOKEN` | `{ refresh_token }` → `{ access_token, refresh_token, expires_at }` |
 
 ## Arquivos
 
 | Arquivo | Papel |
 |---|---|
-| `src/index.ts` | Worker: auth do service token, `/token/refresh` e o handler MCP |
+| `src/index.ts` | Worker: valida o service token e monta o handler MCP por requisição |
 | `src/tools.ts` | Tools MCP (CRUD genérico por `recurso` + escotilha) |
-| `src/bling-client.ts` | `createRequester` (chamadas com access_token) e `refreshTokens` |
+| `src/bling-client.ts` | `createRequester(accessToken)` — chamadas à API com o token recebido |
 
 ## Setup
 
-### 1. App no Bling
-
-Em [developer.bling.com.br/aplicativos](https://developer.bling.com.br/aplicativos), pegue o
-**Client ID** e **Client Secret** (usados apenas pelo `/token/refresh`). Os escopos definem o que
-o token consegue acessar.
-
-### 2. Dependências
-
 ```bash
 npm install
-```
-
-### 3. Secrets (Cloudflare)
-
-```bash
-npx wrangler secret put SERVICE_TOKEN      # token compartilhado entre seus apps
-npx wrangler secret put BLING_CLIENT_ID
-npx wrangler secret put BLING_CLIENT_SECRET
-```
-
-Para dev local, copie `.dev.vars.example` para `.dev.vars` e preencha os três.
-
-### 4. Deploy
-
-```bash
+npx wrangler secret put SERVICE_TOKEN   # token compartilhado entre quem usa o MCP
 npm run deploy
 ```
 
-## Uso pelos apps
+Para dev local: copie `.dev.vars.example` para `.dev.vars` e preencha o `SERVICE_TOKEN`.
 
-Fluxo típico (pseudo-código):
+## Uso (Claude Code / VS Code)
 
-```ts
-// 1) Quando o access_token do cliente expirar, renove via Worker:
-const r = await fetch("https://mcp-bling.bconnector.com.br/token/refresh", {
-  method: "POST",
-  headers: { Authorization: `Bearer ${SERVICE_TOKEN}`, "Content-Type": "application/json" },
-  body: JSON.stringify({ refresh_token: tenant.blingRefreshToken }),
-}).then((r) => r.json());
-// salve r.refresh_token (rotacionado!) e r.access_token na sua base
-
-// 2) Conecte no MCP passando o access_token do cliente:
-//    headers: Authorization: Bearer <SERVICE_TOKEN>; X-Bling-Access-Token: <r.access_token>
-```
-
-### Claude Code (CLI ou extensão do VS Code)
-
-```bash
-claude mcp add --transport http bling https://mcp-bling.bconnector.com.br/mcp \
-  --header "Authorization: Bearer <SERVICE_TOKEN>" \
-  --header "X-Bling-Access-Token: <access_token do cliente>" \
-  --scope project
-```
-
-Ou em `.mcp.json`:
+Pegue o **`access_token` vivo** do cliente-alvo (aquele que o app daquele cliente já usa) e configure:
 
 ```json
 {
@@ -110,18 +62,21 @@ Ou em `.mcp.json`:
       "type": "http",
       "url": "https://mcp-bling.bconnector.com.br/mcp",
       "headers": {
-        "Authorization": "Bearer <SERVICE_TOKEN>",
-        "X-Bling-Access-Token": "<access_token do cliente>"
+        "Authorization": "Bearer ${BLING_SERVICE_TOKEN}",
+        "X-Bling-Access-Token": "${BLING_ACCESS_TOKEN}"
       }
     }
   }
 }
 ```
 
-### Testar com o MCP Inspector
+> Use `${...}` para o Claude Code expandir variáveis de ambiente — assim você **não commita
+> segredo**. Defina `BLING_SERVICE_TOKEN` (o service token) e `BLING_ACCESS_TOKEN` (o token do
+> cliente do momento) no ambiente. O `access_token` vence em ~6h; quando expirar, atualize a env var
+> com um novo (pego do app daquele cliente) e reconecte (`/mcp`).
 
-`npx @modelcontextprotocol/inspector` → Transport `Streamable HTTP`, URL `…/mcp`, e em
-**Authentication/Headers** adicione `Authorization: Bearer <SERVICE_TOKEN>` e
+**Testar no Inspector:** `npx @modelcontextprotocol/inspector` → Transport `Streamable HTTP`,
+URL `…/mcp`, e em Headers adicione `Authorization: Bearer <SERVICE_TOKEN>` e
 `X-Bling-Access-Token: <token>`.
 
 ## Tools disponíveis
@@ -144,14 +99,15 @@ formas-pagamentos, naturezas-operacoes, logisticas[-objetos/-remessas/-servicos]
 ordens-producao, produtos-[estruturas/fornecedores/variacoes], propostas-comerciais,
 situacoes[-modulos/-transicoes], contratos, usuarios). O mapa recurso→path está em `src/tools.ts`.
 
-## Multi-tenant
+## Cuidado ao usar contas reais
 
-Cada requisição carrega o `access_token` de **um** cliente no header. O isolamento é por token:
-o MCP nunca mistura contas, e não guarda credencial nenhuma (stateless).
+Você está operando sobre a conta de **produção** do cliente. `bling_criar`/`bling_atualizar`/
+`bling_excluir` **alteram dados reais**. Para desenvolvimento, prefira as tools de leitura
+(`bling_listar`/`bling_obter`) e tome cuidado redobrado com as de escrita.
 
 ## Hardening (próximos passos sugeridos)
 
-- **Chave por app** em vez de service token único (auditoria/revogação por app).
-- **Rate limiting** por app/tenant (Cloudflare WAF ou contadores).
-- **Onboarding de novos clientes**: endpoint `/oauth/authorize` + `/callback` para capturar o
-  primeiro `refresh_token` de um cliente e te devolver (caso precise emitir novos no futuro).
+- **Chave por dev/app** em vez de service token único (auditoria/revogação).
+- **Espelho de token central (Supabase)**: cada app grava o `access_token` atual numa tabela
+  read-only; o MCP passa a ler por `X-Tenant-Id` e você escolhe o cliente sem colar token na mão.
+- **Modo somente-leitura** opcional (desabilitar as tools de escrita) para uso em produção.

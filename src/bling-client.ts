@@ -1,65 +1,14 @@
 /**
- * Cliente HTTP para a API v3 do Bling + helper de refresh de OAuth.
+ * Cliente HTTP (read-through) para a API v3 do Bling.
  *
- * Docs: https://developer.bling.com.br/bling-api
- *  - Token:    https://www.bling.com.br/Api/v3/oauth/token (Basic auth + form-urlencoded)
- *  - API base: https://api.bling.com.br/Api/v3
+ * Docs: https://developer.bling.com.br/bling-api  (API base: https://api.bling.com.br/Api/v3)
  *
- * Modelo de auth (multi-tenant gerenciado): o app chamador já possui o token do
- * cliente. No /mcp ele envia o `access_token` (pass-through). Para renovar, usa o
- * endpoint /token/refresh, que devolve o refresh_token rotacionado para o app salvar.
+ * Modelo de auth (multi-tenant gerenciado pelo chamador): o app/dev já possui o
+ * access_token do cliente e o envia no header. O MCP só usa o token para chamar a
+ * API — nunca renova (a renovação/rotação fica com quem é dono do token).
  */
 
 export const BLING_API_BASE = "https://api.bling.com.br/Api/v3";
-export const BLING_TOKEN_URL = "https://www.bling.com.br/Api/v3/oauth/token";
-
-export interface BlingTokens {
-  accessToken: string;
-  refreshToken: string;
-  /** Epoch em ms de quando o access_token expira. */
-  expiresAt: number;
-}
-
-interface BlingTokenResponse {
-  access_token: string;
-  expires_in: number;
-  token_type: string;
-  scope?: string;
-  refresh_token: string;
-}
-
-function basicAuthHeader(clientId: string, clientSecret: string): string {
-  return "Basic " + btoa(`${clientId}:${clientSecret}`);
-}
-
-/** Renova o access_token usando o refresh_token. Retorna o refresh_token ROTACIONADO. */
-export async function refreshTokens(
-  refreshToken: string,
-  clientId: string,
-  clientSecret: string,
-): Promise<BlingTokens> {
-  const res = await fetch(BLING_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      Authorization: basicAuthHeader(clientId, clientSecret),
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "1.0",
-    },
-    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }).toString(),
-  });
-
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`Erro OAuth Bling (${res.status}): ${text}`);
-  }
-
-  const data = JSON.parse(text) as BlingTokenResponse;
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  };
-}
 
 export interface BlingRequestOptions {
   query?: Record<string, string | number | boolean | undefined | null>;
