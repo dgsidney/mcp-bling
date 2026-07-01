@@ -1,6 +1,35 @@
 # MCP Bling
 
-Servidor **MCP remoto** para a [API v3 do Bling](https://developer.bling.com.br/home), rodando em **Cloudflare Workers**. Ferramenta de **desenvolvimento/debug**: o time aponta o MCP para a conta de **qualquer cliente** (passando o `access_token` daquele cliente) e trabalha com dados reais — NF-e, etiquetas, particularidades — sem o cliente precisar reautenticar nada.
+> Servidor **MCP (Model Context Protocol) remoto** que expõe a [API v3 do Bling](https://developer.bling.com.br/home) a agentes de IA — multi-tenant, stateless e rodando na edge com **Cloudflare Workers**.
+
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Cloudflare Workers](https://img.shields.io/badge/Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-000000)
+![Hono](https://img.shields.io/badge/Hono-E36002?logo=hono&logoColor=white)
+
+**Stack:** TypeScript · [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol) · Cloudflare Workers · Hono · Zod
+
+Ferramenta de **desenvolvimento/debug**: o time aponta o MCP para a conta de **qualquer cliente** (passando o `access_token` daquele cliente) e trabalha com dados reais — NF-e, etiquetas, particularidades — direto de um assistente de IA, sem o cliente precisar reautenticar nada.
+
+## Destaques de engenharia
+
+- 🔑 **Modelo read-through de token** — o Worker é *stateless* e nunca guarda nem renova credenciais. Decisão deliberada: o Bling rotaciona o `refresh_token` a cada refresh, então renovar aqui invalidaria o token do app em produção do cliente. O MCP só repassa um `access_token` já válido.
+- 🔒 **Somente-leitura por padrão** — as tools de escrita nem aparecem para o agente; habilitar escrita exige um header explícito, e há um **kill-switch global** (`FORCE_READ_ONLY`) no Worker.
+- 🧩 **CRUD genérico tipado** — 6 tools cobrem **~30 módulos** do Bling (produtos, pedidos, NF-e, estoque, financeiro…) via um enum `recurso`, em vez de dezenas de tools redundantes. Uma "escotilha" (`bling_request`) cobre sub-rotas especiais.
+- ☁️ **Edge nativo** — deploy global em Cloudflare Workers, transporte Streamable HTTP, custom domain e observabilidade habilitada.
+
+## Sumário
+
+- [Modelo de auth](#modelo-de-auth)
+- [Endpoints](#endpoints)
+- [Arquivos](#arquivos)
+- [Setup](#setup)
+- [Uso (Claude Code / VS Code)](#uso-claude-code--vs-code)
+- [Tools disponíveis](#tools-disponíveis)
+- [Modo somente-leitura (padrão)](#modo-somente-leitura-padrão)
+- [Hardening (próximos passos sugeridos)](#hardening-próximos-passos-sugeridos)
+
+---
 
 - **Transporte:** Streamable HTTP (`/mcp`)
 - **Auth do chamador:** service token compartilhado (`Authorization: Bearer …`)
